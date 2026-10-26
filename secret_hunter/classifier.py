@@ -148,12 +148,17 @@ def _normalize_analysis(raw: dict[str, Any]) -> Analysis:
     )
 
 
-def classify(client: LlmClient, candidate) -> Analysis:
-    """Classify a single candidate with the configured provider."""
+def classify(client: LlmClient, candidate, mask: bool = False) -> Analysis:
+    """Classify a single candidate with the configured provider.
+
+    When *mask* is True the secret value is masked before being sent to the
+    provider; otherwise the full value is sent (default).  Pass mask=True only
+    if you do not want raw secrets to reach a remote LLM.
+    """
     prompt = build_prompt(
         candidate.label,
         candidate.category,
-        candidate.masked(),
+        candidate.masked() if mask else candidate.value,
         candidate.source,
         candidate.entropy,
         candidate.snippet,
@@ -163,11 +168,11 @@ def classify(client: LlmClient, candidate) -> Analysis:
     return _normalize_analysis(raw)
 
 
-def classify_fallback(client: LlmClient, candidate) -> Analysis:
+def classify_fallback(client: LlmClient, candidate, mask: bool = False) -> Analysis:
     """Best-effort classification; on any provider error return an unclassified
     record so a provider outage never aborts the whole scan."""
     try:
-        return classify(client, candidate)
+        return classify(client, candidate, mask=mask)
     except (ProviderError, Exception):  # noqa: BLE001
         return Analysis(
             criticality="Informational",

@@ -51,6 +51,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Skip LLM classification; regex + entropy only.")
     p.add_argument("--validate", action="store_true",
                    help="Optionally validate a few token types against live APIs (read-only).")
+    p.add_argument("--mask-secrets", action="store_true",
+                   help="Mask secret values in the report and before sending them to a remote LLM. "
+                        "By default secrets are shown in plain text.")
     p.add_argument("--depth", type=int, default=2, help="Crawl depth (default 2).")
     p.add_argument("--max-urls", type=int, default=200, help="Max URLs to fetch (default 200).")
     p.add_argument("--concurrency", type=int, default=8, help="Parallel fetches (default 8).")
@@ -184,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         for cand in candidates:
             key = f"{cand.label}::{cand.value}"
             try:
-                analyses[key] = classify_fallback(client, cand).to_dict()
+                analyses[key] = classify_fallback(client, cand, mask=args.mask_secrets).to_dict()
             except Exception as exc:  # noqa: BLE001
                 analyses[key] = {"criticality": "Informational",
                                  "score": 0.0, "reportable": False,
@@ -202,6 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     report = build_report(
         candidate_dicts, analyses, targets, len(result.pages),
         result.errors, provider_name, subdomains=subdomains,
+        mask=args.mask_secrets,
     )
 
     if args.output:

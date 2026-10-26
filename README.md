@@ -120,15 +120,18 @@ O fluxo de trabalho é dividido em quatro etapas:
    de Shannon. Heurísticas filtram falsos positivos óbvios (placeholders,
    `example`, `test`, valores de baixa entropia, referências a variáveis de
    ambiente).
-3. **Classificação por IA (opcional)** — se um provedor de IA estiver
-   configurado, cada candidato é analisado por um LLM, que devolve gravidade
-   (Critical/High/Medium/Low/Informational/FalsePositive), pontuação de 0 a 10,
-   se é reportável, impacto, correção sugerida, CWE e uma explicação. O valor
-   do segredo é **mascarado antes de ser enviado** ao provedor, para que a
-   credencial bruta não saia da máquina local quando um provedor remoto
-   (Verboo/OpenRouter) é usado.
-4. **Relatório** — os resultados são ordenados (reportáveis primeiro, depois
-   por pontuação) e gravados em JSON, além de um resumo legível no terminal.
+ 3. **Classificação por IA (opcional)** — se um provedor de IA estiver
+    configurado, cada candidato é analisado por um LLM, que devolve gravidade
+    (Critical/High/Medium/Low/Informational/FalsePositive), pontuação de 0 a 10,
+    se é reportável, impacto, correção sugerida, CWE e uma explicação. Por
+    padrão, o valor **completo** do segredo é enviado ao provedor para uma
+    classificação mais precisa. Se preferir não enviar a credencial bruta a um
+    provedor remoto (Verboo/OpenRouter), use `--mask-secrets` para mascarar o
+    valor antes do envio.
+ 4. **Relatório** — os resultados são ordenados (reportáveis primeiro, depois
+    por pontuação) e gravados em JSON, além de um resumo legível no terminal.
+    Por padrão, os segredos aparecem **em texto claro**. Use `--mask-secrets`
+    para exibi-los mascarados.
 
 ---
 
@@ -278,6 +281,7 @@ As flags de linha de comando (`--base-url`, `--api-key`, `--model`,
 | `--model` | — | Sobrescreve o modelo. |
 | `--no-llm` | `false` | Pula a classificação por IA (somente regex). |
 | `--validate` | `false` | Valida alguns tipos de token contra APIs reais (somente leitura). |
+| `--mask-secrets` | `false` | Mascara os segredos no relatório e antes do envio ao LLM. Por padrão, os segredos aparecem em texto claro. |
 | `--depth` | `2` | Profundidade do rastreamento. |
 | `--max-urls` | `200` | Número máximo de URLs a buscar. |
 | `--concurrency` | `8` | Requisições paralelas. |
@@ -315,7 +319,6 @@ O JSON contém metadados e uma lista ordenada de `findings`:
       "type": "OpenAI Key",
       "category": "api_key",
       "value": "sk-proj-...",
-      "masked": "sk-p████████████XXXX",
       "entropy": 5.38,
       "source": "https://exemplo.com/app.js",
       "line": 12,
@@ -336,7 +339,9 @@ O JSON contém metadados e uma lista ordenada de `findings`:
 ```
 
 O resumo em texto (exibido no terminal) lista a gravidade, pontuação, tipo,
-valor mascarado, origem e, quando disponível, explicação, impacto e correção.
+valor do segredo (em texto claro por padrão), origem e, quando disponível,
+explicação, impacto e correção. Com `--mask-secrets`, o campo `value` do JSON
+e a coluna do resumo mostram o valor mascarado.
 
 ---
 
@@ -371,10 +376,13 @@ placeholders, testes, exemplos ou constantes de build.
   ilegal em muitas jurisdições.
 - O modo `--validate` faz chamadas somente leitura a APIs de terceiros. Ele é
   opcional e desativado por padrão.
-- Os valores de segredos são **mascarados antes de serem enviados ao provedor
-  de IA** (exceto no relatório local, onde o valor completo é gravado para que
-  você possa agir). Para varredura totalmente offline, use `--provider ollama`
-  ou `--no-llm`.
+- Por padrão, os segredos aparecem **em texto claro** no relatório e são
+  enviados **sem mascarar** ao provedor de IA. Se você não quiser que uma
+  credencial bruta saia da máquina local (especialmente com um provedor remoto
+  como Verboo/OpenRouter), use `--mask-secrets`. Para varredura totalmente
+  offline, use `--provider ollama` ou `--no-llm`.
+- Como os segredos aparecem em texto claro, trate o relatório JSON com cuidado:
+  ele contém credenciais reais.
 
 ---
 
@@ -401,6 +409,6 @@ domínio registrável (ex.: `app.exemplo.com` e `api.exemplo.com`), ainda sem
 qualquer resolução DNS adicional.
 
 **O valor do segredo aparece no relatório JSON?**
-Sim, o relatório local contém o valor completo (campo `value`) para que você
-possa agir, além do campo mascarado `masked`. Se precisar de um relatório
-sem os valores, use o campo `masked` ou remova `value` ao pós-processar.
+Sim, por padrão o relatório contém o valor **completo em texto claro** (campo
+`value`). Para mascarar os valores no relatório e antes do envio ao LLM, use
+`--mask-secrets`.

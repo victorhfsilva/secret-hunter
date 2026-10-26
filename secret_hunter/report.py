@@ -9,15 +9,21 @@ from typing import Any
 
 def build_report(candidates: list[dict], analyses: dict[str, dict],
                  targets: list[str], pages: int, errors: list[str],
-                 provider: str | None, subdomains: dict[str, list[str]] | None = None) -> dict[str, Any]:
+                 provider: str | None, subdomains: dict[str, list[str]] | None = None,
+                 mask: bool = False) -> dict[str, Any]:
     findings = []
     for cand in candidates:
         key = f"{cand['type']}::{cand['value']}"
         analysis = analyses.get(key)
-        findings.append({
-            **cand,
-            "analysis": analysis,
-        })
+        finding = {**cand, "analysis": analysis}
+        if mask:
+            # Privacy mode: only the masked value is retained in the report.
+            finding["value"] = cand.get("masked", cand["value"])
+            finding["masked"] = cand.get("masked", cand["value"])
+        else:
+            # Plain text: expose the full value and drop the masked field.
+            finding.pop("masked", None)
+        findings.append(finding)
     # Sort: reportable first, then by score.
     def sort_key(f):
         a = f.get("analysis") or {}
@@ -63,14 +69,14 @@ def render_text(report: dict) -> str:
     if report["errors"]:
         lines.append(f" Errors         : {len(report['errors'])}")
     lines.append("")
-    lines.append(f" {'CRITICALITY':<16}{'SCORE':<7}{'TYPE':<26}{'VALUE (MASKED)':<34}")
+    lines.append(f" {'CRITICALITY':<16}{'SCORE':<7}{'TYPE':<26}{'VALUE':<40}")
     lines.append("-" * 78)
     for f in report["findings"]:
         a = f.get("analysis") or {}
         crit = a.get("criticality", "Informational")
         score = f"{a.get('score', 0.0):.1f}"
-        masked = f.get("masked", "")
-        lines.append(f" {crit:<16}{score:<7}{f['type']:<26}{masked:<34}")
+        value = f.get("value", "")
+        lines.append(f" {crit:<16}{score:<7}{f['type']:<26}{value:<40}")
         if a.get("explanation"):
             lines.append(f"   -> {a['explanation']}")
         if a.get("impact"):
