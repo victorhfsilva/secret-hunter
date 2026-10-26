@@ -9,7 +9,7 @@ from typing import Any
 
 def build_report(candidates: list[dict], analyses: dict[str, dict],
                  targets: list[str], pages: int, errors: list[str],
-                 provider: str | None) -> dict[str, Any]:
+                 provider: str | None, subdomains: dict[str, list[str]] | None = None) -> dict[str, Any]:
     findings = []
     for cand in candidates:
         key = f"{cand['type']}::{cand['value']}"
@@ -34,6 +34,9 @@ def build_report(candidates: list[dict], analyses: dict[str, dict],
         "provider": provider,
         "pages_fetched": pages,
         "candidates_found": len(candidates),
+        "subdomains_discovered": {
+            apex: subs for apex, subs in (subdomains or {}).items()
+        },
         "errors": errors,
         "findings": findings,
     }
@@ -53,6 +56,10 @@ def render_text(report: dict) -> str:
     lines.append(f" LLM provider   : {report['provider'] or '(none - regex only)'}")
     lines.append(f" Pages fetched  : {report['pages_fetched']}")
     lines.append(f" Candidates     : {report['candidates_found']}")
+    subs = report.get("subdomains_discovered") or {}
+    if subs:
+        total = sum(len(v) for v in subs.values())
+        lines.append(f" Subdomains     : {total} across {len(subs)} domain(s)")
     if report["errors"]:
         lines.append(f" Errors         : {len(report['errors'])}")
     lines.append("")

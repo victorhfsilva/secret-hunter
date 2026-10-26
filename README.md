@@ -7,6 +7,11 @@ catálogo de padrões de expressões regulares, e opcionalmente enriquece cada
 candidato com uma classificação feita por um modelo de linguagem (LLM) dos
 provedores **Verboo**, **OpenRouter** ou **Ollama**.
 
+A partir de um arquivo de domínios (`--domains-file`), ele também descobre os
+**subdomínios** de cada um deles de forma **passiva**, usando os logs públicos
+de Certificate Transparency (crt.sh) via HTTP. Isso é feito **antes** da
+varredura e os subdomínios encontrados são adicionados como alvos.
+
 Diferentemente de ferramentas de enumeração de subdomínios (como `dnsx`),
 `secret-hunter` **não resolve nem força subdomínios via DNS**. Ele faz apenas
 requisições HTTP(S) às sementes fornecidas e segue links e referências de
@@ -19,6 +24,7 @@ instável, mas o tráfego HTTP normal funciona.
 ## Índice
 
 - [Por que HTTP apenas (e por que isso combina com Mullvad)](#por-que-http-apenas-e-por-que-isso-combina-com-mullvad)
+- [Descoberta passiva de subdomínios](#descoberta-passiva-de-subdomínios)
 - [O que ele faz](#o-que-ele-faz)
 - [Recursos](#recursos)
 - [Requisitos](#requisitos)
@@ -50,6 +56,52 @@ como a Mullvad:
 enumeração DNS**. O escopo é definido apenas pela string da URL (esquema +
 domínio registrável), e toda a descoberta é feita por requisições HTTP(S) reais
 — exatamente o tipo de tráfego que a Mullvad encaminha sem problemas.
+
+---
+
+## Descoberta passiva de subdomínios
+
+Quando você fornece uma lista de domínios (`--domains-file`), `secret-hunter`
+descobre os subdomínios de cada um **antes** da varredura. Para manter a
+compatibilidade com a Mullvad, essa descoberta **não usa DNS**: ela consulta os
+logs públicos de **Certificate Transparency** via crt.sh (uma API HTTP) e
+coleta os hostnames que aparecem nos certificados emitidos para cada domínio.
+
+```bash
+# domínios.txt (uma linha por domínio, comentários com # são ignorados)
+cat > domínios.txt <<'EOF'
+example.com
+other.org
+EOF
+
+# Descobre subdomínios e adiciona cada um como alvo, depois varre tudo
+python3 secret-hunter.py --domains-file domínios.txt
+```
+
+O que acontece por baixo:
+
+1. O arquivo é lido e normalizado (esquema/porta são removidos).
+2. Para cada domínio, uma consulta a `crt.sh` retorna os SANs dos certificados.
+   Wildcards (`*.exemplo.com`) são normalizados e entradas de outros domínios
+   são descartadas.
+3. Os subdomínios encontrados (mais o próprio domínio) são adicionados como
+   alvos e o rastreamento HTTP é executado sobre todos eles.
+
+Cada domínio é consultado em paralelo (controlado por `--concurrency`) e o
+resultado é limitado a 500 subdomínios por domínio para evitar respostas
+gigantes. Se o crt.sh estiver inacessível, a descoberta falha de forma
+"aberta": os domínios do arquivo continuam sendo varridos, sem subdomínios.
+
+Para usar os domínios do arquivo **sem** descobrir subdomínios, use
+`--no-subdomains`:
+
+```bash
+python3 secret-hunter.py --domains-file domínios.txt --no-subdomains
+```
+
+O endpoint do crt.sh pode ser sobrescrito pela variável
+`SECRET_HUNTER_CRT_SH_URL` (útil para testes ou para um frontend próprio de
+logs CT). O placeholder `{domain}` é substituído pelo domínio.
 
 ---
 
@@ -85,6 +137,8 @@ O fluxo de trabalho é dividido em quatro etapas:
 - **Catálogo com dezenas de padrões**, cobrindo AWS, GCP, Azure, GitHub,
   GitLab, Slack, Discord, OpenAI, Anthropic, Stripe, PayPal, MongoDB,
   PostgreSQL, MySQL, Redis, JWT, chaves privadas PEM, e muitos outros tipos.
+- **Descoberta passiva de subdomínios** a partir de um arquivo de domínios
+  (`--domains-file`), via Certificate Transparency (crt.sh), sem DNS.
 - **Rastreamento com escopo por URL**, sem enumeração DNS.
 - **Profundidade, limite de URLs e concorrência configuráveis.**
 - **Coleta de source maps** para expor código-fonte original.
@@ -216,6 +270,8 @@ As flags de linha de comando (`--base-url`, `--api-key`, `--model`,
 | Opção | Padrão | Descrição |
 |-------|--------|-----------|
 | `targets` (posicional) | — | URL(s) ou hostname(s) semente. |
+| `--domains-file` | — | Arquivo `.txt` com um domínio por linha; subdomínios são descobertos antes da varredura e adicionados como alvos. |
+| `--no-subdomains` | `false` | Não descobre subdomínios para os domínios de `--domains-file`. |
 | `--provider` | env/`ollama` | `verboo`, `openrouter` ou `ollama`. |
 | `--base-url` | — | Sobrescreve a base URL do provedor. |
 | `--api-key` | — | Sobrescreve a chave do provedor. |
@@ -250,6 +306,9 @@ O JSON contém metadados e uma lista ordenada de `findings`:
   "provider": "ollama",
   "pages_fetched": 42,
   "candidates_found": 7,
+  "subdomains_discovered": {
+    "example.com": ["www.example.com", "api.example.com", "admin.example.com"]
+  },
   "errors": [],
   "findings": [
     {
@@ -323,8 +382,13 @@ placeholders, testes, exemplos ou constantes de build.
 
 **Por que não funciona com `dnsx` / enumeração de subdomínios?**
 Porque `secret-hunter` não faz enumeração DNS por design. Ele rastreia apenas
-o que já é conhecido (as sementes) e o que é descoberto por links/JS. Isso é
+o que já é conhecido (as sementes), o que é descoberto por links/JS, e os
+subdomínios obtidos de forma passiva via Certificate Transparency. Isso é
 intencional para funcionar atrás de VPNs como a Mullvad.
+
+**O `--domains-file` faz brute-force de subdomínios?**
+Não. Ele usa os logs públicos de certificados (crt.sh), que é uma consulta HTTP
+e não uma varredura DNS. Assim, funciona normalmente atrás da Mullvad.
 
 **O provedor de IA caiu. A varredura quebra?**
 Não. A classificação falha de forma "aberta": cada candidato recebe

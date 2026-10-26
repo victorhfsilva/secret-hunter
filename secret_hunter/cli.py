@@ -5,8 +5,9 @@ web pages and JavaScript, extracts candidate secrets with a regex catalog,
 optionally enriches them with an LLM (Verboo, OpenRouter or Ollama) and emits
 a JSON + human-readable report.
 
-It deliberately performs NO DNS enumeration (no dnsx-style subdomain
-discovery), which makes it reliable behind a VPN such as Mullvad.
+Subdomain discovery (when enabled) is PASSIVE via certificate-transparency
+logs (crt.sh) over HTTP -- never DNS brute-forcing -- so it still works
+behind a VPN such as Mullvad.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from typing import Any
 from . import __version__
 from .classifier import classify_fallback
 from .crawler import Crawler
+from .discovery import discover_subdomains, read_domains_file
 from .patterns import extract_candidates
 from .providers import ProviderConfig, LlmClient, ProviderError
 from .report import build_report, render_text, write_json
@@ -28,10 +30,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="secret-hunter",
         description="HTTP-only web secret/credential hunter for authorized testing.",
-        epilog="No DNS enumeration is performed, so it works behind a VPN such as Mullvad.",
+        epilog=(
+            "Subdomain discovery (--domains-file) is passive via certificate "
+            "transparency (crt.sh), not DNS. No DNS enumeration is performed, "
+            "so it works behind a VPN such as Mullvad."
+        ),
     )
-    p.add_argument("targets", nargs="+",
+    p.add_argument("targets", nargs="*",
                    help="Seed URL(s) or bare hostname(s) to scan (e.g. https://example.com or example.com).")
+    p.add_argument("--domains-file", help="Text file with one domain per line; subdomains are discovered "
+                                          "before the scan and added as targets.")
+    p.add_argument("--no-subdomains", action="store_true",
+                   help="Do not discover subdomains for the domains in --domains-file.")
     p.add_argument("--provider", choices=("verboo", "openrouter", "ollama"),
                    help="LLM provider for enrichment. Default from SECRET_HUNTER_PROVIDER or 'ollama'.")
     p.add_argument("--base-url", help="Override the provider base URL (scheme+host).")
@@ -68,15 +78,70 @@ def _parse_headers(items: list[str]) -> dict[str, str]:
     return headers
 
 
+def _resolve_targets(args) -> tuple[list[str], dict[str, list[str]]]:
+    """Build the final target list and any discovered subdomains.
+
+    Returns (targets, subdomains) where *subdomains* is a mapping of
+    {apex_domain: [subdomain, ...]} populated only when --domains-file is used
+    and discovery is enabled.
+    """
+    targets = list(args.targets)
+    subdomains: dict[str, list[str]] = {}
+
+    if args.domains_file:
+        try:
+            domains = read_domains_file(args.domains_file)
+        except ValueError as exc:
+            raise SystemExit(f"[!] {exc}") from exc
+        if not domains:
+            raise SystemExit("[!] No domains found in the file.")
+
+        if args.no_subdomains:
+            targets.extend(domains)
+        else:
+            subdomains = discover_subdomains(
+                domains, timeout=args.timeout, concurrency=args.concurrency,
+                proxy=args.proxy,
+            )
+            for apex, subs in subdomains.items():
+                targets.append(apex)
+                targets.extend(subs)
+            if not args.quiet:
+                total = sum(len(s) for s in subdomains.values())
+                print(f"[+] Discovered {total} subdomain(s) across {len(subdomains)} domain(s).")
+                for apex, subs in subdomains.items():
+                    print(f"    {apex}: {len(subs)}")
+
+    # Preserve order, drop duplicates and empties.
+    seen: set[str] = set()
+    final: list[str] = []
+    for t in targets:
+        t = t.strip()
+        if t and t not in seen:
+            seen.add(t)
+            final.append(t)
+    return final, subdomains
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # ---- Resolve targets / subdomains ------------------------------------
+    try:
+        targets, subdomains = _resolve_targets(args)
+    except SystemExit as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if not targets:
+        print("[!] No targets. Provide a target or use --domains-file.", file=sys.stderr)
+        return 1
 
     # ---- Crawl -----------------------------------------------------------
     headers = _parse_headers(args.header)
     if args.user_agent:
         headers["User-Agent"] = args.user_agent
     crawler = Crawler(
-        targets=args.targets,
+        targets=targets,
         depth=args.depth,
         max_urls=args.max_urls,
         concurrency=args.concurrency,
@@ -135,8 +200,8 @@ def main(argv: list[str] | None = None) -> int:
 
     candidate_dicts = [c.to_dict() for c in candidates]
     report = build_report(
-        candidate_dicts, analyses, args.targets, len(result.pages),
-        result.errors, provider_name,
+        candidate_dicts, analyses, targets, len(result.pages),
+        result.errors, provider_name, subdomains=subdomains,
     )
 
     if args.output:
